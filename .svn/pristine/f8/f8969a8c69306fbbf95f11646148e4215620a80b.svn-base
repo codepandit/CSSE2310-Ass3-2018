@@ -1,0 +1,149 @@
+#include "player.h"
+
+char select_action(Player* p);
+char select_horiz_direction(Player* p);
+char select_short_target(Player* p);
+
+int main(int argc, char** argv) {
+    Player p;
+    check_argc(argc); 
+    assign_argv_values(&p, argv);
+    fprintf(stdout, "!");
+    fflush(stdout);
+    p.lootMap = initial_setup(p.playerInfo, &(p.numRound),
+            p.numCars, p.seed, p.numPlayers);
+    p.lastDirection = '-'; 
+
+    while(1) {
+        enum hubMsgType curMsgType = rob_train(&p);
+        if (curMsgType == YOURTURN) {
+            char act = select_action(&p);
+            p.lastAction = act;
+            send_message(PLAY, act);
+        } else if (curMsgType == HORIZCHOICE) {
+            char dir = select_horiz_direction(&p);
+            send_message(SIDEWAYS, dir);
+        } else if (curMsgType == SHORTCHOICE) {
+            char target = select_short_target(&p);
+            send_message(TARGETSHORT, target);
+        }
+    }
+   
+    return 0;
+}
+
+char select_action(Player* p) {
+    int pID = p->playerIndex;
+    int xPos = p->playerInfo[pID].xPos;
+    int yPos = p->playerInfo[pID].yPos;
+
+    if (p->lootMap[xPos][yPos] > 0) {
+        // loot here
+        return '$';
+    } else if (p->lastAction != 's' && p->lastAction != 'l') {
+        for (int i = 0; i < p->numPlayers; ++i) {
+            int x = p->playerInfo[i].xPos;
+            int y = p->playerInfo[i].yPos;
+
+            if (xPos == x && yPos == y && i != p->playerIndex) {
+                return 's';
+            }
+        }
+    }
+
+    if (p->lootMap[xPos][!yPos] > p->lootMap[xPos][yPos]) {
+        return 'v';
+    } else {
+        int left = 0;
+        int right = 0;
+        for (int i = 0; i < xPos; ++i) {
+            left += p->lootMap[i][0];
+            left += p->lootMap[i][1];
+        }
+
+        for (int i = xPos + 1; i < p->numCars; ++i) {
+            right += p->lootMap[i][0];
+            right += p->lootMap[i][1];
+        }
+
+        if (left != right) {
+            return 'h';
+        }
+    }
+
+    for (int i = 0; i < p->numPlayers; ++i) {
+        int x = p->playerInfo[i].xPos;
+        int y = p->playerInfo[i].yPos;
+        
+        if (i == p->playerIndex) {
+            continue;
+        }        
+
+        if (yPos == 0) {
+            if (y == 0 && (x == xPos - 1 || x == xPos + 1)) {
+                return 'l';
+            } 
+        } else if (yPos == 1) {
+            if (y == 1 && x != xPos) {
+                return 'l';
+            }
+        }
+    }
+
+    return 'v';
+}
+
+char select_horiz_direction(Player* p) {
+    int xPos = p->playerInfo[p->playerIndex].xPos;
+
+    int left = 0;
+    int right = 0;
+    for (int i = 0; i < xPos; ++i) {
+        left += p->lootMap[i][0];
+        left += p->lootMap[i][1];
+    }
+
+    for (int i = xPos + 1; i < p->numCars; ++i) {
+        right += p->lootMap[i][0];
+        right += p->lootMap[i][1];
+    }
+
+    if (left < right) {
+        if (xPos != p->numCars - 1) {
+            p->lastDirection = '+';
+        } else {
+            p->lastDirection = '-';
+        }
+    } else if (right < left) {
+        if (xPos != 0) {
+            p->lastDirection = '-';
+        } else {
+            p->lastDirection = '+';
+        }
+    } else if (right == left) {
+        if (xPos != 0) {
+            p->lastDirection = '-';
+        } else {
+            p->lastDirection = '+';
+        }
+    }
+    return p->lastDirection;
+}
+
+char select_short_target(Player* p) {
+    int xPos = p->playerInfo[p->playerIndex].xPos;
+    int yPos = p->playerInfo[p->playerIndex].yPos;
+
+    for (int i = 0; i < p->numPlayers; ++i) {
+        if (i == p->playerIndex) {
+            continue;
+        }
+
+        if (xPos == p->playerInfo[i].xPos 
+            && yPos == p->playerInfo[i].yPos) {
+            return (i + 65); 
+        } 
+    }
+
+    return '-';
+}

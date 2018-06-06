@@ -1,0 +1,13 @@
+#include "player.h"
+
+int main(int argc, char** argv) {
+    Player p;
+    check_argc(argc);
+    fprintf(stdout, "!");
+    fflush(stdout);
+    assign_argv_values(&p, argv);
+    initial_setup(p.playerInfo, p.lootMap, &(p.numRound),
+            p.numCars, p.seed);
+   
+    return 0;
+}

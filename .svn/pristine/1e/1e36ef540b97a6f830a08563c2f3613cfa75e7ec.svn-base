@@ -1,0 +1,24 @@
+CC = gcc
+CFLAGS = -Wall -pedantic -std=gnu99 -lm
+all: acrophobe 2310express
+
+acrophobe: acrophobe.o player.o helper.o
+	$(CC) $(CFLAGS) -o acrophobe acrophobe.o player.o helper.o
+
+acrophobe.o: acrophobe.c
+	$(CC) $(CFLAGS) -c acrophobe.c
+
+player.o: player.c player.h
+	$(CC) $(CFLAGS) -c player.c
+
+helper.o: helper.c helper.h
+	$(CC) $(CFLAGS) -c helper.c
+
+2310express: 2310express.o helper.o
+	$(CC) $(CFLAGS) -o 2310express 2310express.o helper.o
+
+2310express.o: 2310express.c 2310express.h
+	$(CC) $(CFLAGS) -c 2310express.c
+
+clean:
+	rm 2310express acrophobe *.o

@@ -1,0 +1,376 @@
+#include "2310express.h"
+
+int main(int argc, char** argv) {
+    Hub h;
+    check_argc(argc);
+    assign_argv_values(&h, argv, argc);
+    assign_programs(&h, argv, argc);
+    initial_setup(h.playerInfo, h.lootMap, &(h.numRound),
+            h.numCars, h.seed, h.playerCount);
+    make_pipes(&h); 
+    make_child_processes(&h);
+    play_game(&h); 
+    return 0;
+}
+
+void play_game(Hub* h) {
+    for (int i = 0; i < MAXROUNDS; ++i) {
+        for (int j = 0; j < h->playerCount; ++j) {
+            // new round msg
+            send_message(ROUND, h->pcStreams[j], 0, 0); 
+        }
+        
+        // store each players actions for this round here
+        char playerActions[h->playerCount];
+
+        for (int j = 0; j < h->playerCount; ++j) {
+            // each players turn
+            if (h->playerInfo[j].hits < MAXHITS) {
+                // not dried out
+                send_message(YOURTURN, h->pcStreams[j], 0, 0);
+                
+                int playerLetter = 65 + j;
+                int actionSubmit;
+                handle_response(h, j, &actionSubmit, PLAY);      
+         
+                for (int k = 0; k < h->playerCount; ++k) {
+                    send_message(ORDERED, h->pcStreams[k], playerLetter, 
+                            actionSubmit);
+                }
+
+                playerActions[j] = actionSubmit;
+            } else {
+                // dried out
+                playerActions[j] = 'd'; // use 'd' for dried out
+            }
+        }
+
+        for (int j = 0; j < h->playerCount; ++j) {
+            // execute msg
+            send_message(EXECUTE, h->pcStreams[j], 0, 0);
+        }
+
+        for (int j = 0; j < h->playerCount; ++j) {
+            char a = playerActions[j]; 
+
+            // get additional info (if required)
+            int extraInfo;
+            if (a == 's' || a == 'l' || a == 'h') {
+                if (playerActions[j] == 's') {
+                    send_message(SHORTCHOICE, h->pcStreams[j], 0, 0);
+                    handle_response(h, j, &extraInfo, TARGETSHORT);
+                } else if (playerActions[j] == 'l') {
+                    send_message(LONGCHOICE, h->pcStreams[j], 0, 0);
+                    handle_response(h, j, &extraInfo, TARGETLONG);
+                } else if (playerActions[j] == 'h') {
+                    send_message(HORIZCHOICE, h->pcStreams[j], 0, 0);
+                    handle_response(h, j, &extraInfo, SIDEWAYS);
+                } 
+            }
+           
+            if (a == 's' || a == 'l') {
+                // extra info is a player id so - 65
+                update_game_state(h, j, a, extraInfo - 65);
+            } else {
+                // any extra info here should remain as the char
+                update_game_state(h, j, a, extraInfo);
+            }
+            
+            for (int k = 0; k < h->playerCount; ++k) {
+                if (a == 'l') {
+                    send_message(LONG, h->pcStreams[k], j, extraInfo - 65);
+                } else if (a == 's') { 
+                    send_message(SHORT, h->pcStreams[k], j, extraInfo - 65);
+                } else if (a == '$') { 
+                    send_message(LOOTED, h->pcStreams[k], j, 0);
+                } else if (a == 'd') {
+                    send_message(DRIED, h->pcStreams[k], j, 0);
+                } else if (a == 'h') {
+                    send_message(HORIZMOVE, h->pcStreams[k], 
+                            j, extraInfo - 65);
+                } else if (a == 'v') {
+                    send_message(VERMOVE, h->pcStreams[k], j, 0);
+                }
+            }
+        }
+    }
+}
+
+void update_game_state(Hub* h, int playerID, char a, int extraInfo) {
+    // update game state 
+    if (a == 's') {
+        execute_short_action(h->lootMap, h->playerInfo, playerID, extraInfo);
+    } else if (a == 'l') {
+        execute_long_action(h->playerInfo, playerID, extraInfo);
+    } else if (a == 'h') {
+        execute_horiz_action(h->playerInfo, playerID, extraInfo, 
+                h->numCars);
+    } else if (a == 'v') {
+        execute_vert_action(h->playerInfo, playerID);
+    } else if (a == '$') {
+        execute_loot_action(h->lootMap, h->playerInfo, playerID);
+    } else if (a == 'd') {
+        execute_dried_action(h->playerInfo, playerID);
+    }
+}
+
+void handle_response(Hub* h, int playerID, int* param, 
+        enum playerMsgType expectedMessage) {
+    char msg[14]; 
+    get_message(13, msg, h->cpStreams[playerID]);
+
+    if (!strncmp(msg, "play", 4) && strlen(msg) == 5) {
+        if (expectedMessage != PLAY) {
+            exit_status(PROTERROR);
+        }
+
+        char X = msg[4];
+        if (X == 'v' || X == 'l' || X == 's' || X == '$' || X == 'h') {
+            // valid
+            *param = X;
+        } else {
+            // invalid
+            exit_status(PROTERROR);
+        }
+    } else if (!strncmp(msg, "sideways", 8) && strlen(msg) == 9) {
+        if (expectedMessage != SIDEWAYS) {
+            exit_status(PROTERROR);
+        }
+    
+        char X = msg[8];
+        if (X == '+' || X == '-') {
+            // valid
+            *param = X;
+        } else {
+            // invalid
+            exit_status(PROTERROR);
+        }
+    } else if (!strncmp(msg, "target_short", 12) && strlen(msg) == 13) {
+        if (expectedMessage != TARGETSHORT) {
+            exit_status(PROTERROR);
+        }
+
+        char X = msg[12];
+        if (!check_valid_player(X, h->playerCount) && X != '-') {
+            // invalid
+            exit_status(PROTERROR);
+        } else {
+            // valid
+            *param = X;
+        }
+    } else if (!strncmp(msg, "target_long", 11) && strlen(msg) == 12) {
+        if (expectedMessage != TARGETLONG) {
+            exit_status(PROTERROR);
+        }
+
+        char X = msg[11];
+        if (!check_valid_player(X, h->playerCount) && X != '-') {
+            // invalid
+            exit_status(PROTERROR);
+        } else {
+            // valid
+            *param = X;
+        }
+    } else {
+        // invalid message
+        exit_status(PROTERROR);
+    }
+}
+
+void get_message(int maxLength, char* msg, FILE* stream) {
+    char c;
+    int i = 0;
+    while (((c = fgetc(stream)) != '\n') && (c != EOF)) {
+        if (i < maxLength) {
+            msg[i] = c;
+            msg[i + 1] = '\0';
+        } else {
+            exit_status(PROTERROR);
+        }
+        i++;
+    }
+
+    if (c == EOF) {
+        exit_status(CLIENTDC);
+    }
+}
+
+void check_argc(int argc) {
+    if (argc < 5 || argc > MAXARGC) {
+        exit_status(WRONGARGCOUNT);
+    }
+}
+
+void assign_argv_values(Hub* h, char** argv, int argc){
+    long numofcars, seed;
+    char* ptr;
+
+    seed = strtol(argv[1], &ptr, 10);
+
+    if (seed == 0 && !(argv[1][0] == '0' && strlen(argv[1]) == 1)) {
+        exit_status(BADARG);
+    }
+
+    if (seed < 0 || seed > UINT_MAX) {
+        exit_status(BADARG);
+    }
+
+    numofcars = strtol(argv[2], &ptr, 10);
+
+    if (numofcars < MINCARRIAGES) {
+        exit_status(BADARG);
+    }        
+
+    h->seed = seed;
+    h->numCars = numofcars;
+}
+
+void assign_programs(Hub* h, char** argv, int argc) {
+    for (int j = 3; j < argc; ++j) {
+        h->playerPrograms[j - 3] = argv[j];
+    }
+
+    h->playerCount = argc - 3; 
+}
+
+void make_pipes(Hub* h) {
+    for (int i = 0; i < h->playerCount; ++i) {
+        if (pipe(h->pc[i]) < 0 || pipe(h->cp[i]) < 0) {
+            exit_status(BADSTART);
+        }
+    }
+}
+
+void make_child_processes(Hub* h) { 
+    pid_t child;
+    for (int i = 0; i < h->playerCount; ++i) {
+        child = fork();
+
+        if (child == -1) {
+            // fork failed
+            exit_status(BADSTART);
+        } else if (child == 0) {
+            // child process
+            // close off pipe ends
+            for (int j = 0; j < h->playerCount; ++j) {
+                // close off hub
+                close(h->pc[j][1]);
+                close(h->cp[j][0]);
+                if (i != j) {
+                    // close off other players
+                    close(h->pc[j][0]);
+                    close(h->cp[j][1]);
+                }
+            }
+
+            // afterwards: should just have h->pc[i][0] and 
+            // h->cp[i][1] open
+            
+            // dup2: STDIN <-> h->pc[i][0], STDOUT <-> h->cp[i][1]
+            
+            dup2(h->pc[i][0], STDIN_FILENO);
+            close(h->pc[i][0]);
+            dup2(h->cp[i][1], STDOUT_FILENO);
+            close(h->cp[i][1]);
+
+            char pCountParam[3];
+            char pIDParam[3];
+            
+            int lenSeed = digit_count(h->seed) + 1;
+            int lenCarr = digit_count(h->numCars) + 1;
+            
+            char seedParam[lenSeed];
+            char carrParam[lenCarr];
+
+            sprintf(pCountParam, "%d", h->playerCount);
+            sprintf(pIDParam, "%d", i);
+            sprintf(seedParam, "%d", h->seed);
+            sprintf(carrParam, "%d", h->numCars);
+
+            execlp(h->playerPrograms[i], h->playerPrograms[i], 
+               pCountParam, pIDParam, carrParam, seedParam, NULL);
+           
+            // just print some other character 
+            fprintf(stdout, ")");
+            fflush(stdout);
+            exit(20);
+        } else if (child > 0) {
+            // parent process
+            // close off child pipe ends
+            close(h->pc[i][0]);
+            close(h->cp[i][1]);
+
+            h->pcStreams[i] = fdopen(h->pc[i][1], "w"); 
+            h->cpStreams[i] = fdopen(h->cp[i][0], "r");
+            if (h->pcStreams[i] == NULL || h->cpStreams[i] == NULL) {
+                exit_status(BADSTART);
+            }
+            if (fgetc(h->cpStreams[i]) != '!') {
+                exit_status(BADSTART);
+            }
+        }
+    }
+}
+
+void send_message(enum hubMsgType msgType, FILE* stream, 
+        int param1, int param2) {
+    if (msgType == GAMEOVER) {
+        fprintf(stream, "gameover\n");
+    } else if (msgType == ROUND) {
+        fprintf(stream, "round\n");
+    } else if (msgType == YOURTURN) {
+        fprintf(stream, "yourturn\n");
+    } else if (msgType == ORDERED) {
+        fprintf(stream, "ordered%c%c\n", ASCIIA + param1, param2);
+    } else if (msgType == EXECUTE) {
+        fprintf(stream, "execute\n");
+    } else if (msgType == HORIZCHOICE) {
+        fprintf(stream, "h?\n");
+    } else if (msgType == SHORTCHOICE) {
+        fprintf(stream, "s?\n");
+    } else if (msgType == LONGCHOICE) {
+        fprintf(stream, "l?\n");
+    } else if (msgType == HORIZMOVE) {
+        fprintf(stream, "hmove%c%c\n", ASCIIA + param1, param2);
+    } else if (msgType == VERMOVE) {
+        fprintf(stream, "vmove%c\n", ASCIIA + param1);
+    } else if (msgType == LONG) {
+        fprintf(stream, "long%c%c\n", ASCIIA + param1, ASCIIA + param2);
+    } else if (msgType == SHORT) {
+        fprintf(stream, "short%c%c\n", ASCIIA + param1, ASCIIA + param2);
+    } else if (msgType == LOOTED) {
+        fprintf(stream, "looted%c\n", ASCIIA + param1);
+    } else if (msgType == DRIED) {
+        fprintf(stream, "driedout%c\n", ASCIIA + param1);
+    }
+}
+
+void exit_status(enum ecode value) { 
+    switch (value) {
+        case NORMAL:
+            break;
+        case WRONGARGCOUNT:
+            fprintf(stderr, "Usage: hub seed width player player [player ...]\n");
+            break;
+        case BADARG:
+            fprintf(stderr, "Bad argument\n");
+            break;
+        case BADSTART:
+            fprintf(stderr, "Bad start\n");
+            break;
+        case CLIENTDC:
+            fprintf(stderr, "Client disconnected\n");
+            break;
+        case PROTERROR:
+            fprintf(stderr, "Protocol error by client\n");
+            break;
+        case ILLMOVE:
+            fprintf(stderr, "Illegal move by client\n");
+            break;
+        case SIGINTCAUGHT:
+            fprintf(stderr, "SIGINT caught\n");
+            break;
+    }
+
+    exit(value);
+}

@@ -1,0 +1,175 @@
+#include "2310express.h"
+
+int main(int argc, char** argv) {
+    Hub h;
+    check_argc(argc);
+    assign_argv_values(&h, argv, argc);
+    assign_programs(&h, argv, argc);
+    make_pipes(&h); 
+    make_child_processes(&h); 
+    return 0;
+}
+
+void check_argc(int argc) {
+    if (argc < 5 || argc > MAXARGC) {
+        exit_status(WRONGARGCOUNT);
+    }
+}
+
+void assign_argv_values(Hub* h, char** argv, int argc){
+    long numofcars, seed;
+    char* ptr;
+
+    seed = strtol(argv[1], &ptr, 10);
+
+    if (seed == 0 && !(argv[1][0] == '0' && strlen(argv[1]) == 1)) {
+        exit_status(BADARG);
+    }
+
+    if (seed < 0 || seed > UINT_MAX) {
+        exit_status(BADARG);
+    }
+
+    numofcars = strtol(argv[2], &ptr, 10);
+
+    if (numofcars < MINCARRIAGES) {
+        exit_status(BADARG);
+    }        
+
+    h->seed = seed;
+    h->numCars = numofcars;
+}
+
+void assign_programs(Hub* h, char** argv, int argc) {
+    for (int j = 3; j < argc; ++j) {
+        h->playerPrograms[j - 3] = argv[j];
+    }
+
+    h->playerCount = argc - 3; 
+}
+
+void make_pipes(Hub* h) {
+    for (int i = 0; i < h->playerCount; ++i) {
+        if (pipe(h->pc[i]) < 0 || pipe(h->cp[i]) < 0) {
+            exit_status(BADSTART);
+        }
+    }
+}
+
+void make_child_processes(Hub* h) { 
+    pid_t child;
+    for (int i = 0; i < h->playerCount; ++i) {
+        child = fork();
+
+        if (child == -1) {
+            // fork failed
+            exit_status(BADSTART);
+        } else if (child == 0) {
+            // child process
+            // close off pipe ends
+            for (int j = 0; j < h->playerCount; ++j) {
+                // close off hub
+                close(h->pc[j][1]);
+                close(h->cp[j][0]);
+                if (i != j) {
+                    // close off other players
+                    close(h->pc[j][0]);
+                    close(h->cp[j][1]);
+                }
+            }
+
+            // afterwards: should just have h->pc[i][0] and 
+            // h->cp[i][1] open
+            
+            // dup2: STDIN <-> h->pc[i][0], STDOUT <-> h->cp[i][1]
+            
+            dup2(h->pc[i][0], STDIN_FILENO);
+            close(h->pc[i][0]);
+            dup2(h->cp[i][1], STDOUT_FILENO);
+            close(h->cp[i][1]);
+
+            char pCountParam[3];
+            char pIDParam[3];
+            
+            int lenSeed = digit_count(h->seed) + 1;
+            int lenCarr = digit_count(h->numCars) + 1;
+            
+            char seedParam[lenSeed];
+            char carrParam[lenCarr];
+
+            sprintf(pCountParam, "%d", h->playerCount);
+            sprintf(pIDParam, "%d", i);
+            sprintf(seedParam, "%d", h->seed);
+            sprintf(carrParam, "%d", h->numCars);
+
+            fprintf(stderr, pCountParam);
+            fprintf(stderr, pIDParam);
+            fprintf(stderr, seedParam);
+            fprintf(stderr, carrParam);
+            
+            execlp(h->playerPrograms[i], h->playerPrograms[i], 
+               pCountParam, pIDParam, carrParam, seedParam, NULL);
+
+            exit_status(BADSTART);
+        } else if (child > 0) {
+            // parent process
+            // close off child pipe ends
+            close(h->pc[i][0]);
+            close(h->cp[i][1]);
+
+            h->pcStreams[i] = fdopen(h->pc[i][1], "w"); 
+            h->cpStreams[i] = fdopen(h->cp[i][0], "r");
+            if (h->pcStreams[i] == NULL || h->cpStreams[i] == NULL) {
+                exit_status(BADSTART);
+            }
+            
+        }
+    }
+}
+
+void read_from_child(int file) {
+    FILE* stream;
+    int c;
+    stream = fdopen(file, "r");
+    while (( c = fgetc(stream)) != EOF){
+        putchar(c);//hubfd[1] need to implement
+    }
+    fclose(stream);
+}
+
+void write_to_child(int file) {
+    FILE* stream;
+    stream = fdopen(file, "w");
+    fprintf(stream, "childfd[0] need to implement");
+    fclose(stream);
+}
+
+void exit_status(enum ecode value) {
+    
+    switch (value) {
+        case NORMAL:
+            break;
+        case WRONGARGCOUNT:
+            fprintf(stderr, "Usage: hub seed width player player [player ...]\n");
+            break;
+        case BADARG:
+            fprintf(stderr, "Bad argument\n");
+            break;
+        case BADSTART:
+            fprintf(stderr, "Bad start\n");
+            break;
+        case CLIENTDC:
+            fprintf(stderr, "Client disconnected\n");
+            break;
+        case PROTERROR:
+            fprintf(stderr, "Protocol error by client\n");
+            break;
+        case ILLMOVE:
+            fprintf(stderr, "Illegal move by client\n");
+            break;
+        case SIGINTCAUGHT:
+            fprintf(stderr, "SIGINT caught\n");
+            break;
+    }
+    exit(value);
+}

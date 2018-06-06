@@ -1,0 +1,21 @@
+#include "helper.h"
+
+#define MAXARGC 29
+
+typedef struct {
+    int playerCount;
+    int seed;
+    int numCars;
+    int** lootMap;
+    PlayerStatus playerInfo[MAXPLAYERS];
+    char* playerPrograms[MAXPLAYERS];
+    int numRound;
+} Hub;
+
+void check_argc(int argc);
+void exit_status(int value);
+void assign_argv_values(Hub* h, char** argv, int argc);
+void read_from_child(int file);
+void write_to_child(int file);
+void assign_programs(Hub* h, char** argv, int argc);
+void make_child_processes(char** argv, Hub* h, int argc);

@@ -1,0 +1,24 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <signal.h>
+#include <string.h>
+#include <unistd.h>
+#include <math.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <ctype.h>
+#include <inttypes.h>
+#include <limits.h>
+
+#define MINPLAYERS 2
+#define MAXPLAYERS 26
+#define MINCARRIAGES 3
+#define CARRIAGELEVELS 2
+#define MAXROUNDS 15
+
+typedef struct {
+    int xPos;
+    int yPos;
+    int hits;
+    int loot;
+} PlayerStatus;

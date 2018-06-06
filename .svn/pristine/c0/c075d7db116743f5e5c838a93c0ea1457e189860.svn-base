@@ -1,0 +1,109 @@
+#include "2310express.h"
+
+int main(int argc, char** argv) {
+    Hub h;
+    check_argc(argc);
+    assign_argv_values(&h, argv, argc);
+    assign_programs(&h, argv, argc); 
+    make_child_processes(argv, &h, argc); 
+    return 0;
+}
+
+void check_argc(int argc) {
+    if (argc < 5 || argc > MAXARGC) {
+        exit_status(1);
+    }
+}
+
+void assign_argv_values(Hub* h, char** argv, int argc){
+    long numofcars, seed;
+    char* ptr;
+
+    seed = strtol(argv[1], &ptr, 10);
+
+    if (seed < 0 || seed > UINT_MAX || !(argv[1][0] == '0' 
+            && strlen(argv[1]) == 1)) {
+        exit_status(2);
+    }
+
+    numofcars = strtol(argv[2], &ptr, 10);
+
+    if (numofcars < 3){
+        exit_status(2);
+    }        
+
+    h->seed = seed;
+    h->numCars = numofcars;
+}
+
+void assign_programs(Hub* h, char** argv, int argc) {
+    for (int j = 3; j < argc; ++j) {
+        h->playerPrograms[j - 3] = argv[j];
+        printf("%s\n", h->playerPrograms[j]);
+    }
+
+    h->playerCount = argc - 3; 
+}
+
+void make_child_processes(Hub* h) { 
+    int pc[2], cp[2]; //pid;
+    int j = 0;
+    pid_t child;
+    for (int i = 0; i < h->playerCount; ++i) {
+        if (pipe(pc) < 0 || pipe(cp) < 0) {
+            exit_status(5); // not sure if display this messsage
+        }        
+        if ((child = fork()) == 0) {
+            execl(h->playerPrograms[j], h->playerPrograms[j], 
+                h->seed, h->numCars, NULL);
+            ++j;
+        }// should check for error if child is created successfully
+    }
+}
+
+void read_from_child(int file) {
+    FILE* stream;
+    int c;
+    stream = fdopen(file, "r");
+    while (( c = fgetc(stream)) != EOF){
+        putchar(c);//hubfd[1] need to implement
+    }
+    fclose(stream);
+}
+
+void write_to_child(int file) {
+    FILE* stream;
+    stream = fdopen(file, "w");
+    fprintf(stream, "childfd[0] need to implement");
+    fclose(stream);
+}
+
+void exit_status(int value) {
+    
+    switch (value) {
+        case 0:
+            break;
+        case 1:
+            fprintf(stderr, "Usage: hub seed width player player [player ...]\n");
+            break;
+        case 2:
+            fprintf(stderr, "Bad argument\n");
+            break;
+        case 3:
+            fprintf(stderr, "Bad start\n");
+            break;
+        case 4:
+            fprintf(stderr, "Client disconnected\n");
+            break;
+        case 5:
+            fprintf(stderr, "Protocol error by client\n");
+            break;
+        case 6:
+            fprintf(stderr, "Illegal move by client\n");
+            break;
+        case 9:
+            fprintf(stderr, "SIGINT caught\n");
+            break;
+    }
+    exit(value);
+}

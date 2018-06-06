@@ -1,0 +1,556 @@
+#include "2310express.h"
+
+Hub* sigPointer;
+
+int main(int argc, char** argv) {
+    Hub h;
+    sigPointer = &h; 
+    h.sigint = 0;
+    h.playersThatStarted = 0;
+    h.allStarted = 0;
+
+    signals();
+    check_argc(argc, &h);
+    assign_argv_values(&h, argv, argc);
+    assign_programs(&h, argv, argc);
+    h.lootMap = initial_setup(h.playerInfo, &(h.numRound),
+            h.numCars, h.seed, h.playerCount);
+    make_pipes(&h);
+        make_child_processes(&h);
+    play_game(&h); 
+    return 0;
+}
+
+void signals() {
+    struct sigaction pipe, sint;
+    pipe.sa_handler = ignore_pipe_signal; 
+    sint.sa_handler = inter;
+    sigaction(SIGPIPE, &pipe, NULL);
+    sigaction(SIGINT, &sint, NULL);
+
+}
+
+void ignore_pipe_signal(int sigID) {
+}
+
+void inter(int sigID) {
+    sigPointer->sigint = 1;
+    exit_status(SIGINTCAUGHT, sigPointer);
+}
+
+void close_children_players(Hub* h) {
+    for (int i = 0; i < h->playersThatStarted; ++i) {
+        send_message(GAMEOVER, h->pcStreams[i], 0, 0);
+    }
+
+    // wait for 2 seconds
+    sleep(2);
+
+    for (int i = 0; i < h->playersThatStarted; ++i) {
+        int chldSt = 0;
+        waitpid(h->childrenProcess[i], &chldSt, WNOHANG);
+
+        // see if child exited
+        if (!WIFEXITED(chldSt)) {
+            // didn't exit so KILL
+            kill(h->childrenProcess[i], SIGKILL);
+        }
+        // only report on children if they all started
+        // AND
+        // cause wasn't SIGINT
+        if (h->allStarted == 1 && !(h->sigint)) {
+            if (WIFEXITED(chldSt)) {
+                if (WEXITSTATUS(chldSt) == 0) {
+                    // don't print anything
+                } else {
+                    //fprintf(stderr, "Player %d ended with status %d\n", i, WEXITSTATUS(chldSt)); 
+                }
+            } else if (WIFSIGNALED(chldSt)) {
+                //fprintf(stderr, "Player %d shutdown after receiving signal %d\n", i, WTERMSIG(chldSt));
+            }
+        }
+    }
+    
+    
+}
+
+/**
+ * This is the main function
+ * */
+void play_game(Hub* h) {
+    for (int i = 0; i < MAXROUNDS; ++i) {
+        for (int j = 0; j < h->playerCount; ++j) {
+            // new round msg
+            send_message(ROUND, h->pcStreams[j], 0, 0); 
+        }
+        
+        // store each players actions for this round here
+        char playerActions[h->playerCount];
+
+        for (int j = 0; j < h->playerCount; ++j) {
+            // each players turn
+            
+            if (h->playerInfo[j].hits < MAXHITS) {
+                // not dried out
+                send_message(YOURTURN, h->pcStreams[j], 0, 0);
+                
+                int actionSubmit;
+                handle_response(h, j, &actionSubmit, PLAY); 
+         
+                for (int k = 0; k < h->playerCount; ++k) {
+                    send_message(ORDERED, h->pcStreams[k], j, 
+                            actionSubmit);
+                }
+
+                playerActions[j] = actionSubmit;
+            } else {
+                // dried out
+                playerActions[j] = 'd'; // use 'd' for dried out
+            }
+        }
+
+        for (int j = 0; j < h->playerCount; ++j) {
+            // execute msg
+            send_message(EXECUTE, h->pcStreams[j], 0, 0);
+        }
+
+        for (int j = 0; j < h->playerCount; ++j) {
+            char a = playerActions[j]; 
+            // get additional info (if required)
+            int extraInfo;
+            if (a == 's' || a == 'l' || a == 'h') {
+                get_additional_info(a, j, h, &extraInfo);
+            }
+           
+            if (a == 's' || a == 'l') {
+                // extra info is a player id so - 65
+                update_game_state(h, j, a, extraInfo - ASCIIA);
+            } else {
+                // any extra info here should remain as the char
+                update_game_state(h, j, a, extraInfo);
+            }
+            
+            send_update_message(h, j, extraInfo, a);
+        }
+        
+        // end of round
+        
+        if (i == MAXROUNDS - 1) {
+            round_end_message(h, 1);
+        } else {
+            round_end_message(h, 0);
+        }
+    }
+
+    //game over
+    exit_status(NORMAL, h);
+}
+
+/*
+ * This function will ask for addition information
+ * */
+void get_additional_info(char action, int j, Hub* h, 
+        int* extraInfo) {
+    if (action == 's') {
+        send_message(SHORTCHOICE, h->pcStreams[j], 0, 0);
+        handle_response(h, j, extraInfo, TARGETSHORT);
+    } else if (action == 'l') {
+        send_message(LONGCHOICE, h->pcStreams[j], 0, 0);
+        handle_response(h, j, extraInfo, TARGETLONG);
+    } else if (action == 'h') {
+        send_message(HORIZCHOICE, h->pcStreams[j], 0, 0);
+        handle_response(h, j, extraInfo, SIDEWAYS);
+    }
+}
+
+/*
+ * send the message to all players
+ * */
+void send_update_message(Hub* h, int j, int extraInfo, char a) {
+    for (int k = 0; k < h->playerCount; ++k) {
+        if (a == 'l') {
+            send_message(LONG, h->pcStreams[k], j, 
+                    extraInfo - ASCIIA);
+        } else if (a == 's') { 
+            send_message(SHORT, h->pcStreams[k], j, 
+                    extraInfo - ASCIIA);
+        } else if (a == '$') { 
+            send_message(LOOTED, h->pcStreams[k], j, 0);
+        } else if (a == 'd') {
+            send_message(DRIED, h->pcStreams[k], j, 0);
+        } else if (a == 'h') {
+            send_message(HORIZMOVE, h->pcStreams[k], 
+                    j, extraInfo);
+        } else if (a == 'v') {
+            send_message(VERMOVE, h->pcStreams[k], j, 0);
+        }
+    }
+}
+
+/*
+ * Update the game status
+ * */
+void update_game_state(Hub* h, int playerID, char a, int extraInfo) {
+    // update game state 
+    if (a == 's') {
+        execute_short_action(h->lootMap, h->playerInfo, playerID, extraInfo);
+    } else if (a == 'l') {
+        execute_long_action(h->playerInfo, playerID, extraInfo);
+    } else if (a == 'h') {
+        execute_horiz_action(h->playerInfo, playerID, extraInfo, 
+                h->numCars);
+    } else if (a == 'v') {
+        execute_vert_action(h->playerInfo, playerID);
+    } else if (a == '$') {
+        execute_loot_action(h->lootMap, h->playerInfo, playerID);
+    } else if (a == 'd') {
+        execute_dried_action(h->playerInfo, playerID);
+    }
+}
+
+/*
+ * handleresponse from the player
+ * */
+void handle_response(Hub* h, int playerID, int* param, 
+        enum playerMsgType expectedMessage) {
+    char msg[14]; 
+    int ret = get_message(13, msg, h->cpStreams[playerID]);
+    if (ret == -1) {
+        exit_status(PROTERROR, h);
+    } else if (ret == -2) {
+        exit_status(CLIENTDC, h);
+    }
+
+    if (!strncmp(msg, "play", 4) && strlen(msg) == 5) {
+        if (expectedMessage != PLAY) {
+            exit_status(PROTERROR, h);
+        }
+
+        char X = msg[4];
+        if (X == 'v' || X == 'l' || X == 's' || X == '$' || X == 'h') {
+            // valid
+            *param = X;
+        } else {
+            // invalid
+            exit_status(PROTERROR, h);
+        }
+    } else if (!strncmp(msg, "sideways", 8) && strlen(msg) == 9) {
+        if (expectedMessage != SIDEWAYS) {
+            exit_status(PROTERROR, h);
+        }
+    
+        char X = msg[8];
+
+        int ret = check_illegal_horiz(h->playerInfo, playerID, X, 
+                h->numCars);
+        if (ret == -1) {
+            exit_status(PROTERROR, h);
+        } else if (ret == -2) {
+            exit_status(ILLMOVE, h);
+        } else {
+            // valid
+            *param = X;
+        }
+    } else if (!strncmp(msg, "target_short", 12) && strlen(msg) == 13) {
+        if (expectedMessage != TARGETSHORT) {
+            exit_status(PROTERROR, h);
+        }
+
+        char X = msg[12];
+        if (!check_valid_player(X, h->playerCount) && X != '-') {
+            // invalid
+            exit_status(PROTERROR, h);
+        } else {
+            // valid
+            *param = X;
+        }
+    } else if (!strncmp(msg, "target_long", 11) && strlen(msg) == 12) {
+        if (expectedMessage != TARGETLONG) {
+            exit_status(PROTERROR, h);
+        }
+
+        char X = msg[11];
+        if (!check_valid_player(X, h->playerCount) && X != '-') {
+            // invalid
+            exit_status(PROTERROR, h);
+        } else {
+            // valid
+            *param = X;
+        }
+    } else {
+        // invalid message
+        exit_status(PROTERROR, h);
+    }
+}
+
+/*
+ * check the parse arguments
+ * */
+void check_argc(int argc, Hub* h) {
+    if (argc < 5 || argc > MAXARGC) {
+        exit_status(WRONGARGCOUNT, h);
+    }
+}
+
+/*
+ * assign the argv value
+ * */
+void assign_argv_values(Hub* h, char** argv, int argc) {
+    long numofcars, seed;
+    char* ptr;
+
+    seed = strtol(argv[1], &ptr, 10);
+
+    if (seed == 0 && !(argv[1][0] == '0' && strlen(argv[1]) == 1)) {
+        exit_status(BADARG, h);
+    }
+
+    if (seed < 0 || seed > UINT_MAX) {
+        exit_status(BADARG, h);
+    }
+
+    numofcars = strtol(argv[2], &ptr, 10);
+
+    if (numofcars < MINCARRIAGES) {
+        exit_status(BADARG, h);
+    }        
+
+    h->seed = seed;
+    h->numCars = numofcars;
+}
+
+/*
+ * assign new programs of players
+ * */
+void assign_programs(Hub* h, char** argv, int argc) {
+    for (int j = 3; j < argc; ++j) {
+        h->playerPrograms[j - 3] = argv[j];
+    }
+
+    h->playerCount = argc - 3; 
+}
+
+/*
+ * create new pipes
+ * */
+void make_pipes(Hub* h) {
+    for (int i = 0; i < h->playerCount; ++i) {
+        if (pipe(h->pc[i]) < 0 || pipe(h->cp[i]) < 0) {
+            exit_status(BADSTART, h);
+        }
+    }
+}
+
+/*
+ * create new child processes
+ * */
+void make_child_processes(Hub* h) { 
+    pid_t child;
+    for (int i = 0; i < h->playerCount; ++i) {
+        child = fork();
+
+        if (child == -1) {
+            // fork failed
+            exit_status(BADSTART, h);
+        } else if (child == 0) {
+            // child process
+            // close off pipe ends
+            for (int j = 0; j < h->playerCount; ++j) {
+                // close off hub
+                close(h->pc[j][1]);
+                close(h->cp[j][0]);
+                if (i != j) {
+                    // close off other players
+                    close(h->pc[j][0]);
+                    close(h->cp[j][1]);
+                }
+            }
+
+            // afterwards: should just have h->pc[i][0] and 
+            // h->cp[i][1] open
+             
+            dupfds(h, i);
+            setup_arg_exec(h, i);     
+           
+            // just print some other character 
+            fprintf(stdout, "F");
+            fflush(stdout);
+            // just exit with any status
+            exit(1);
+        } else if (child > 0) {
+            // parent process
+            // close off child pipe ends
+            close(h->pc[i][0]);
+            close(h->cp[i][1]);
+
+            h->pcStreams[i] = fdopen(h->pc[i][1], "w"); 
+            h->cpStreams[i] = fdopen(h->cp[i][0], "r");
+            if (h->pcStreams[i] == NULL || h->cpStreams[i] == NULL) {
+                exit_status(BADSTART, h);
+            }
+            if (fgetc(h->cpStreams[i]) != '!') {
+                exit_status(BADSTART, h);
+            } else {
+                // good start
+                h->childrenProcess[i] = child;
+                h->playersThatStarted++;
+                if (h->playersThatStarted == h->playerCount) {
+                    h->allStarted = 1;
+                }
+            }
+        }
+    }
+}
+
+void dupfds(Hub* h, int i) {
+    // dup2: STDIN <-> h->pc[i][0], STDOUT <-> h->cp[i][1]
+    dup2(h->pc[i][0], STDIN_FILENO);
+    close(h->pc[i][0]);
+    dup2(h->cp[i][1], STDOUT_FILENO);
+    close(h->cp[i][1]);
+
+    int devNull = open("/dev/null", O_WRONLY);
+    dup2(devNull, STDERR_FILENO);
+}
+
+void setup_arg_exec(Hub* h, int i) {
+    char pCountParam[3];
+    char pIDParam[3];
+
+    int lenSeed = digit_count(h->seed) + 1;
+    int lenCarr = digit_count(h->numCars) + 1;
+    
+    char seedParam[lenSeed];
+    char carrParam[lenCarr];
+
+    sprintf(pCountParam, "%d", h->playerCount);
+    sprintf(pIDParam, "%d", i);
+    sprintf(seedParam, "%d", h->seed);
+    sprintf(carrParam, "%d", h->numCars);
+
+    execlp(h->playerPrograms[i], h->playerPrograms[i], 
+            pCountParam, pIDParam, carrParam, seedParam, NULL);
+}
+
+/*
+ * send message about game to players
+ * */
+void send_message(enum hubMsgType msgType, FILE* stream, 
+        int param1, int param2) {
+    if (msgType == GAMEOVER) {
+        fprintf(stream, "gameover\n");
+    } else if (msgType == ROUND) {
+        fprintf(stream, "round\n");
+    } else if (msgType == YOURTURN) {
+        fprintf(stream, "yourturn\n");
+    } else if (msgType == ORDERED) {
+        fprintf(stream, "ordered%c%c\n", ASCIIA + param1, param2);
+    } else if (msgType == EXECUTE) {
+        fprintf(stream, "execute\n");
+    } else if (msgType == HORIZCHOICE) {
+        fprintf(stream, "h?\n");
+    } else if (msgType == SHORTCHOICE) {
+        fprintf(stream, "s?\n");
+    } else if (msgType == LONGCHOICE) {
+        fprintf(stream, "l?\n");
+    } else if (msgType == HORIZMOVE) {
+        fprintf(stream, "hmove%c%c\n", ASCIIA + param1, param2);
+    } else if (msgType == VERMOVE) {
+        fprintf(stream, "vmove%c\n", ASCIIA + param1);
+    } else if (msgType == LONG) {
+        fprintf(stream, "long%c%c\n", ASCIIA + param1, ASCIIA + param2);
+    } else if (msgType == SHORT) {
+        fprintf(stream, "short%c%c\n", ASCIIA + param1, ASCIIA + param2);
+    } else if (msgType == LOOTED) {
+        fprintf(stream, "looted%c\n", ASCIIA + param1);
+    } else if (msgType == DRIED) {
+        fprintf(stream, "driedout%c\n", ASCIIA + param1);
+    }
+    fflush(stream);
+}
+
+/*
+ * exit status defined here
+ * */
+void exit_status(enum ecode value, Hub* h) {
+    close_children_players(h); 
+    switch (value) {
+        case NORMAL:
+            break;
+        case WRONGARGCOUNT:
+            fprintf(stderr, "Usage: hub seed width player player" 
+                    " [player ...]\n");
+            break;
+        case BADARG:
+            fprintf(stderr, "Bad argument\n");
+            break;
+        case BADSTART:
+            fprintf(stderr, "Bad start\n");
+            break;
+        case CLIENTDC:
+            fprintf(stderr, "Client disconnected\n");
+            break;
+        case PROTERROR:
+            fprintf(stderr, "Protocol error by client\n");
+            break;
+        case ILLMOVE:
+            fprintf(stderr, "Illegal move by client\n");
+            break;
+        case SIGINTCAUGHT:
+            fprintf(stderr, "SIGINT caught\n");
+            break;
+    }
+
+    exit(value);
+}
+
+/*
+ * send end of the round message to all players
+ * */
+void round_end_message(Hub* h, int winners) {
+    for (int i = 0; i < h->playerCount; ++i) {
+        int xPos = h->playerInfo[i].xPos;
+        int yPos = h->playerInfo[i].yPos;
+        int loot = h->playerInfo[i].loot;
+        int hits = h->playerInfo[i].hits;
+
+        fprintf(stdout, "%c@(%d,%d): $=%d hits=%d\n", i + ASCIIA,
+                xPos, yPos, loot, hits);
+    }
+
+    for (int i = 0; i < h->numCars; ++i) {
+        int lowerLoot = h->lootMap[i][0];
+        int upperLoot = h->lootMap[i][1];
+        fprintf(stdout, "Carriage %d: $=%d : $=%d\n", i,
+                lowerLoot, upperLoot);
+    }
+    
+    int maxLoot = 0;
+    for (int i = 0; i < h->playerCount; ++i) {
+        if (h->playerInfo[i].loot > maxLoot) {
+            maxLoot = h->playerInfo[i].loot;
+        }
+    }
+
+    int winnersArray[h->playerCount];
+    memset(winnersArray, 0, h->playerCount * sizeof(int));
+    int lastWinner = 0;    
+
+    for (int i = 0; i < h->playerCount; ++i) {
+        if (h->playerInfo[i].loot == maxLoot) {
+            winnersArray[i] = 1;
+            lastWinner = i;
+        }
+    }
+
+    if (winners == 1) {
+        fprintf(stdout, "Winner(s):");
+        for (int i = 0; i < h->playerCount; ++i) {
+            if (i == lastWinner) {
+                fprintf(stdout, "%c\n", i + 65);
+            } else if (winnersArray[i] == 1) {
+                fprintf(stdout, "%c,", i + 65);
+            }
+        }
+    }
+}

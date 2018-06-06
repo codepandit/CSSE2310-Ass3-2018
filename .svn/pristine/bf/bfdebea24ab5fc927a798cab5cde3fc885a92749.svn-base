@@ -1,0 +1,181 @@
+#include "player.h"
+
+void check_argc(int argc) {
+    if (argc < 5 || argc > 5) {
+        exit_status(BADARG);
+    }
+}
+
+void assign_argv_values(Player* p, char** argv) {
+ 
+    long numofplayers, playernum, numofcars, seed;
+    char* ptr;
+
+    numofplayers = strtol(argv[1], &ptr, 10);
+    playernum = strtol(argv[2], &ptr, 10);
+    numofcars = strtol(argv[3], &ptr, 10);
+    seed = strtol(argv[4], &ptr, 10);
+
+    // check valid player count
+    if (numofplayers < MINPLAYERS || numofplayers > MAXPLAYERS) {
+        exit_status(BADNUMPLAY);
+    }
+    
+    // check valid player id
+    if (playernum == 0 && !(argv[2][0] == '0' && strlen(argv[2]) == 1)) {
+        exit_status(BADID);
+    } else if (playernum < 0 || playernum >= numofplayers) {
+        exit_status(BADID);
+    }
+
+    // check valid carriages
+    if (numofcars < MINCARRIAGES){
+        exit_status(BADNUMCAR);
+    }
+
+    // check valid seed
+    if (seed == 0 && !(argv[4][0] == '0' && strlen(argv[4]) == 1)) {
+        exit_status(BADSEED);  
+    } else if (seed < 0 || seed > UINT_MAX) {
+        exit_status(BADSEED);
+    }
+ 
+    p->numPlayers = numofplayers;
+    p->playerIndex = playernum;
+    p->numCars = numofcars;
+    p->seed = seed;
+}
+
+void initial_setup(Player* p){
+
+    int totalLoot, lootPosX, lootPosY ;
+
+    //initialise the rounds
+    p->numRound = 0;
+
+    //initialise the 2D array will all 0's
+    memset(p->playerInfo, 0 , sizeof(PlayerStatus) * MAXPLAYERS);
+
+    //allocate the memory to store the position of loot
+    p->lootMap = malloc(sizeof(int*) * p->numCars);
+    for (int i = 0; i < p->numCars; ++i) {
+        p->lootMap[i] = malloc(sizeof(int) * CARRIAGELEVELS);
+    }
+
+    //initialise the loot
+    totalLoot = ((p->seed % 4) + 1) * p->numCars;
+
+    //distribute the loot
+    for (int i = 0; i < totalLoot; ++i) {
+        if(i == 0){
+            lootPosX = ceil((p->numCars/2.0));
+            lootPosY = 0;
+        } else {
+            lootPosX = (lootPosX + (p->seed % 101)) % p->numCars;
+            lootPosY = (lootPosY + (p->seed % 2)) % 2;
+        }
+        //printf("%d %d\n", lootPosX, lootPosY);
+        p->lootMap[lootPosX][lootPosY]++;
+    }
+}
+
+//need to finish this
+void yourturn(Player* p){
+    printf("something");
+    fflush(stdout); 
+}
+
+void process_msg(char* msg, Player* p){
+    if (strncmp(msg, "yourturn", 8) == 0 && strlen(msg) == 8) {
+        yourturn(p);
+    }
+    if (strncmp(msg, "round", 5) == 0 && strlen(msg) == 5) {
+        if (p->numRound < MAXROUNDS) {
+            p->numRound++;//or maybe use increment function
+        }
+    }
+    if (strncmp(msg, "ordered", 7) == 0 && strlen(msg) == 9) {
+        /* X - the player who submitted the action
+         * V - the action they chose
+         * */
+        char X = msg[7];
+        char V = msg[8];
+    }
+    if (strncmp(msg, "hmove", 5) == 0 && strlen(msg) == 7) {
+        /* X - the player who moved
+         * Y - move left or right
+         * */
+        char X = msg[5];
+        char Y = msg[6];
+    }
+    if (strncmp(msg, "vmove", 5) == 0 && strlen(msg) == 6) {
+        /* X - the player who moved * */
+        char X = msg[5];
+    }
+    if (strncmp(msg, "long", 4) == 0 && strlen(msg) == 6) {
+        /* X - the player who targeted
+         * T - the player who was targeted
+         * */
+        char X = msg[4];
+        char T = msg[5];
+    }
+    if (strncmp(msg, "short", 5) == 0 && strlen(msg) == 7) {
+        /* X - the player who targeted
+         * T - the player who was targeted
+         * */
+        char X = msg[5];
+        char T = msg[6];
+    } 
+    if (strncmp(msg, "looted", 6) == 0 && strlen(msg) == 7) {
+        /* X - the player who was looted or who looted * */
+        char X = msg[6];
+    }
+    if (strncmp(msg, "dried", 5) == 0 && strlen(msg) == 6) {
+        /* X - the player who took 3 hits and dried off * */
+        char X = msg[5];
+    }
+}
+
+/**void read_from_hub(int file) {
+    FILE* stream;
+    int c;
+    stream = fdopen(file, "r");
+    while ((c = fgetc(stream)) != EOF) {
+        putchar(c); // playerfd[1] need to implement
+    }
+    fclose(stream);
+}
+
+void write_to_hub(int file) {
+    FILE* stream;
+    stream fdopen(file, "w");
+    fprintf(stream, "playerfd[0] need to implement");
+    fclose(stream);
+}*/
+
+void exit_status(enum ecode e) {
+    
+    switch (e) {
+        case OK:
+            break;
+        case BADARG:
+            fprintf(stderr, "Usage: player pcount myid width seed\n");
+            break;
+        case BADNUMPLAY:
+            fprintf(stderr, "Invalid player count\n");
+            break;
+        case BADID:
+            fprintf(stderr, "Invalid player ID\n");
+            break;
+        case BADNUMCAR:
+            fprintf(stderr, "Invalid width\n");
+            break;
+        case BADSEED:
+            fprintf(stderr, "Invalid seed\n");
+            break;
+        case BADCOM:
+            fprintf(stderr, "Communication Error\n");
+            break;
+    }
+    exit(e);
+}

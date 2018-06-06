@@ -1,0 +1,11 @@
+#include "player.h"
+
+int main(int argc, char** argv) {
+    Player p;
+    check_argc(argc);
+    assign_argv_values(&p, argv);
+    initial_setup(&p);
+
+    fprintf(stderr, "!");
+    return 0;
+}

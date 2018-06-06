@@ -1,0 +1,30 @@
+#include "helper.h"
+
+enum ecode {
+    OK = 0,
+    BADARG,
+    BADNUMPLAY,
+    BADID,
+    BADNUMCAR,
+    BADSEED,
+    BADCOM,
+};
+
+typedef struct {
+    int numPlayers;
+    int playerIndex;
+    int seed;
+    int numCars;
+    int** lootMap;
+    int numRound;
+    PlayerStatus playerInfo[MAXPLAYERS];
+    int lastAction;
+    int lastDirection;
+} Player;
+
+void exit_status(enum ecode e);
+void check_argc(int argc);
+void assign_argv_values(Player* p, char** argv);
+enum hubMsgType process_msg(char* msg, Player* p);
+void send_message(enum playerMsgType msgType, int param);
+int rob_train(Player* p);
